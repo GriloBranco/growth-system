@@ -92,13 +92,97 @@ export default function SettingsPage() {
     load();
   };
 
+  const parseCsvLine = (line: string): string[] => {
+    const result: string[] = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') { current += '"'; i++; }
+        else inQuotes = !inQuotes;
+      } else if (ch === "," && !inQuotes) {
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += ch;
+      }
+    }
+    result.push(current.trim());
+    return result;
+  };
+
   const importCsv = async (file: File) => {
     const text = await file.text();
-    const lines = text.split("\n").filter((l) => l.trim());
-    const rows = lines.slice(1).map((line) => {
-      const parts = line.split(",").map((p) => p.trim().replace(/^"|"$/g, ""));
-      return { goal: parts[0], metric: parts[1], target: parts[2], current: parts[3] || "0", quarter: parts[4] || "Q1 2026" };
-    });
+    const lines = text.split(/\r?\n/);
+    const parsed = lines.map((l) => parseCsvLine(l));
+
+    // Try to detect CoGrader NCT spreadsheet format (has "Narratives" and "KR" sections)
+    const narrativesRowIdx = parsed.findIndex((row) => row.some((c) => c.toLowerCase() === "narratives"));
+
+    if (narrativesRowIdx >= 0) {
+      // CoGrader NCT format: extract Narratives with their KRs
+      // Find the header row after "Narratives" (has "Name" and "KR")
+      const headerIdx = parsed.findIndex((row, i) => i > narrativesRowIdx && row.some((c) => c.toLowerCase() === "name") && row.some((c) => c.toLowerCase() === "kr"));
+      if (headerIdx < 0) { alert("Could not find Name/KR header row in the Narratives section."); return; }
+
+      const headerRow = parsed[headerIdx];
+      const nameCol = headerRow.findIndex((c) => c.toLowerCase() === "name");
+      const descCol = headerRow.findIndex((c) => c.toLowerCase().includes("description"));
+      const krCol = headerRow.findIndex((c) => c.toLowerCase() === "kr");
+
+      // Read rows until we hit "Commitments" or an empty section
+      const rows: { goal: string; metric: string; target: string; current: string; quarter: string }[] = [];
+      for (let i = headerIdx + 1; i < parsed.length; i++) {
+        const row = parsed[i];
+        const name = row[nameCol >= 0 ? nameCol : 1] || "";
+        if (!name) continue;
+        if (name.toLowerCase() === "commitments" || name.toLowerCase() === "tasks") break;
+
+        const description = descCol >= 0 ? (row[descCol] || "") : "";
+        const kr = row[krCol >= 0 ? krCol : 6] || "";
+
+        // Parse KR to extract target number
+        const numMatch = kr.match(/([\d,.]+)/);
+        const target = numMatch ? numMatch[1].replace(/,/g, "") : "1";
+        const metric = kr || name;
+        const goal = description ? `${name}: ${description.split("\n")[0].trim()}` : name;
+
+        rows.push({ goal, metric, target, current: "0", quarter: "Q1 2026" });
+      }
+
+      if (rows.length === 0) { alert("No narratives found in the spreadsheet."); return; }
+
+      await fetch("/api/ncts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ import: true, rows }),
+      });
+      load();
+      return;
+    }
+
+    // Fallback: standard CSV with columns goal, metric, target, current, quarter
+    const nonEmpty = parsed.filter((row) => row.some((c) => c));
+    if (nonEmpty.length < 2) { alert("CSV must have a header row and at least one data row."); return; }
+
+    const header = nonEmpty[0].map((h) => h.toLowerCase().replace(/[^a-z]/g, ""));
+    const goalIdx = header.findIndex((h) => h.includes("goal") || h.includes("description") || h.includes("name"));
+    const metricIdx = header.findIndex((h) => h.includes("metric") || h.includes("kr"));
+    const targetIdx = header.findIndex((h) => h.includes("target"));
+    const currentIdx = header.findIndex((h) => h.includes("current"));
+    const quarterIdx = header.findIndex((h) => h.includes("quarter"));
+
+    const rows = nonEmpty.slice(1).map((parts) => ({
+      goal: parts[goalIdx >= 0 ? goalIdx : 0] || "",
+      metric: parts[metricIdx >= 0 ? metricIdx : 1] || "",
+      target: parts[targetIdx >= 0 ? targetIdx : 2] || "",
+      current: parts[currentIdx >= 0 ? currentIdx : 3] || "0",
+      quarter: parts[quarterIdx >= 0 ? quarterIdx : 4] || "Q1 2026",
+    })).filter((r) => r.goal && r.metric && r.target);
+
+    if (rows.length === 0) { alert("No valid rows found. CSV should have columns: goal, metric, target, current, quarter"); return; }
+
     await fetch("/api/ncts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

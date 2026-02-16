@@ -11,10 +11,13 @@ export async function POST(request: NextRequest) {
     const apiKey = body.apiKey || apiKeySetting?.value;
     if (!apiKey) return NextResponse.json({ error: "No API key configured" }, { status: 400 });
     try {
-      const ok = await testApiConnection(apiKey);
-      return NextResponse.json({ success: ok });
+      const result = await testApiConnection(apiKey);
+      if (result.success) {
+        return NextResponse.json({ success: true });
+      }
+      return NextResponse.json({ success: false, error: result.error }, { status: 200 });
     } catch (e) {
-      return NextResponse.json({ error: String(e) }, { status: 500 });
+      return NextResponse.json({ success: false, error: String(e) }, { status: 500 });
     }
   }
 

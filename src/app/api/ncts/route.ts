@@ -13,13 +13,16 @@ export async function POST(request: NextRequest) {
   if (body.import && Array.isArray(body.rows)) {
     const created = [];
     for (const row of body.rows) {
+      const target = parseFloat(row.target);
+      const current = parseFloat(row.current || "0");
+      if (!row.goal || !row.metric || isNaN(target)) continue; // skip invalid rows
       const nct = await prisma.nct.create({
         data: {
           goal: row.goal,
           metric: row.metric,
-          target: parseFloat(row.target),
-          current: parseFloat(row.current || "0"),
-          quarter: row.quarter,
+          target,
+          current: isNaN(current) ? 0 : current,
+          quarter: row.quarter || "Q1 2026",
           isActive: true,
         },
       });

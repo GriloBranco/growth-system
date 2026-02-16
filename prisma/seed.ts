@@ -25,7 +25,6 @@ async function main() {
   await prisma.nct.createMany({
     data: [
       { goal: "Reach 2,000 new teacher sign-ups this quarter", metric: "Sign-ups", target: 2000, current: 940, quarter: "Q1 2026", isActive: true },
-      { goal: "Reduce CAC to $2.50 through organic + referral channels", metric: "CAC ($)", target: 2.50, current: 3.10, quarter: "Q1 2026", isActive: true },
       { goal: "Launch in-product MGM mechanism", metric: "Shipped (0 or 1)", target: 1, current: 0, quarter: "Q1 2026", isActive: true },
     ],
   });

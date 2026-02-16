@@ -1,4 +1,4 @@
-const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-pro:generateContent";
+const GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent";
 
 const SYSTEM_PROMPT = `You are a Growth Sprint Planner for CoGrader, an EdTech company that sells AI essay grading tools to American teachers.
 
@@ -149,7 +149,7 @@ Please analyze this transcript and extract sprint items, backlog items, and any 
   }
 }
 
-export async function testApiConnection(apiKey: string): Promise<boolean> {
+export async function testApiConnection(apiKey: string): Promise<{ success: boolean; error?: string }> {
   const response = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -157,5 +157,16 @@ export async function testApiConnection(apiKey: string): Promise<boolean> {
       contents: [{ parts: [{ text: "Respond with exactly: OK" }] }],
     }),
   });
-  return response.ok;
+  if (!response.ok) {
+    const errorText = await response.text();
+    let message = `API returned ${response.status}`;
+    try {
+      const err = JSON.parse(errorText);
+      message = err.error?.message || message;
+    } catch {
+      // use default message
+    }
+    return { success: false, error: message };
+  }
+  return { success: true };
 }
