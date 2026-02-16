@@ -1,0 +1,251 @@
+"use client";
+
+import { useEffect, useState, useCallback } from "react";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { ProgressBar } from "@/components/ui/ProgressBar";
+import { SprintCard } from "@/components/sprints/SprintCard";
+import { daysUntil, formatDate, formatDateRange, EVENT_TYPE_COLORS } from "@/lib/utils";
+
+interface SprintTask {
+  id: number;
+  text: string;
+  isDone: boolean;
+  sortOrder: number;
+}
+
+interface SprintItem {
+  id: number;
+  name: string;
+  scope: string;
+  status: string;
+  definitionOfDone: string;
+  whyNow: string | null;
+  calendarUrgency: number;
+  impact: number;
+  iceScore: number;
+  deadline: string | null;
+  carriedFromSprintId: number | null;
+  owner: { id: number; name: string } | null;
+  nct: { id: number; goal: string } | null;
+  tasks: SprintTask[];
+}
+
+interface Sprint {
+  id: number;
+  name: string | null;
+  startDate: string;
+  endDate: string;
+  status: string;
+  items: SprintItem[];
+}
+
+interface Nct {
+  id: number;
+  goal: string;
+  metric: string;
+  target: number;
+  current: number;
+  quarter: string;
+  isActive: boolean;
+}
+
+interface CalendarEvent {
+  id: number;
+  name: string;
+  type: string;
+  states: string;
+  startDate: string;
+  endDate: string;
+  prepStartDate: string | null;
+  relevanceNote: string | null;
+}
+
+interface BacklogItem {
+  id: number;
+  name: string;
+  scope: string;
+  iceScore: number;
+}
+
+export default function OverviewPage() {
+  const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
+  const [ncts, setNcts] = useState<Nct[]>([]);
+  const [alerts, setAlerts] = useState<CalendarEvent[]>([]);
+  const [backlog, setBacklog] = useState<BacklogItem[]>([]);
+
+  const load = useCallback(async () => {
+    const [sprintRes, nctsRes, alertsRes, backlogRes] = await Promise.all([
+      fetch("/api/sprints?active=true"),
+      fetch("/api/ncts"),
+      fetch("/api/calendar?alerts=true"),
+      fetch("/api/backlog"),
+    ]);
+    const sprints = await sprintRes.json();
+    setActiveSprint(sprints[0] || null);
+    setNcts((await nctsRes.json()).filter((n: Nct) => n.isActive));
+    setAlerts(await alertsRes.json());
+    setBacklog(await backlogRes.json());
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const updateStatus = async (id: number, status: string) => {
+    await fetch("/api/sprint-items", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, status }),
+    });
+    load();
+  };
+
+  const toggleTask = async (taskId: number, isDone: boolean) => {
+    await fetch("/api/sprint-tasks", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: taskId, isDone }),
+    });
+    load();
+  };
+
+  const addTask = async (itemId: number, text: string) => {
+    await fetch("/api/sprint-tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sprintItemId: itemId, text }),
+    });
+    load();
+  };
+
+  const deleteTask = async (taskId: number) => {
+    await fetch(`/api/sprint-tasks?id=${taskId}`, { method: "DELETE" });
+    load();
+  };
+
+  return (
+    <div className="flex gap-6">
+      {/* Left column - 65% */}
+      <div className="flex-1 min-w-0 space-y-4" style={{ flexBasis: "65%" }}>
+        <h1 className="text-2xl font-semibold">Overview</h1>
+
+        {activeSprint ? (
+          <div>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="font-medium">{activeSprint.name || "Current Sprint"}</h2>
+                <p className="text-sm text-zinc-500">
+                  {formatDateRange(activeSprint.startDate, activeSprint.endDate)}
+                  <span className="ml-2">{daysUntil(activeSprint.endDate)} days remaining</span>
+                </p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {activeSprint.items.map((item) => (
+                <SprintCard
+                  key={item.id}
+                  item={item}
+                  onStatusChange={updateStatus}
+                  onTaskToggle={toggleTask}
+                  onTaskAdd={addTask}
+                  onTaskDelete={deleteTask}
+                />
+              ))}
+            </div>
+          </div>
+        ) : (
+          <Card>
+            <p className="text-sm text-zinc-500 text-center py-8">
+              No active sprint. Go to <a href="/kickoff" className="text-blue-600 hover:underline">Weekly Kickoff</a> to start one.
+            </p>
+          </Card>
+        )}
+      </div>
+
+      {/* Right column - 35% */}
+      <div className="space-y-4" style={{ flexBasis: "35%", minWidth: "300px" }}>
+        {/* Calendar Alerts */}
+        <Card>
+          <h3 className="font-medium mb-3">Calendar Alerts</h3>
+          {alerts.length === 0 ? (
+            <p className="text-sm text-zinc-500">No upcoming events in the next 30 days.</p>
+          ) : (
+            <div className="space-y-2">
+              {alerts.slice(0, 8).map((event) => {
+                const days = daysUntil(event.startDate);
+                const prepDays = event.prepStartDate ? daysUntil(event.prepStartDate) : null;
+                return (
+                  <div key={event.id} className="py-2 border-b border-zinc-50 last:border-0">
+                    <div className="flex items-start justify-between">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">{event.name}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          {event.states.split(",").map((s) => (
+                            <Badge key={s} className="bg-zinc-100 text-zinc-600">{s}</Badge>
+                          ))}
+                          <Badge className={EVENT_TYPE_COLORS[event.type]}>{event.type}</Badge>
+                        </div>
+                      </div>
+                      <div className="text-right flex-shrink-0 ml-2">
+                        <p className={`text-sm font-medium ${days <= 7 ? "text-red-600" : days <= 14 ? "text-amber-600" : "text-zinc-600"}`}>
+                          {days <= 0 ? "Now" : `${days}d`}
+                        </p>
+                        {prepDays !== null && prepDays <= 0 && days > 0 && (
+                          <span className="text-xs text-amber-600 font-medium">Prep NOW</span>
+                        )}
+                      </div>
+                    </div>
+                    {event.relevanceNote && (
+                      <p className="text-xs text-zinc-500 mt-1">{event.relevanceNote}</p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        {/* NCT Progress */}
+        <Card>
+          <h3 className="font-medium mb-3">NCT Progress</h3>
+          {ncts.length === 0 ? (
+            <p className="text-sm text-zinc-500">No active NCTs. Add them in Settings.</p>
+          ) : (
+            <div className="space-y-3">
+              {ncts.map((nct) => (
+                <div key={nct.id}>
+                  <div className="flex items-center justify-between mb-1">
+                    <p className="text-sm font-medium truncate mr-2">{nct.goal}</p>
+                    <span className="text-xs text-zinc-500 flex-shrink-0">{nct.quarter}</span>
+                  </div>
+                  <ProgressBar current={nct.current} target={nct.target} />
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    {nct.current} / {nct.target} {nct.metric}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {/* Backlog Top 5 */}
+        <Card>
+          <h3 className="font-medium mb-3">Up Next from Backlog</h3>
+          {backlog.length === 0 ? (
+            <p className="text-sm text-zinc-500">Backlog is empty.</p>
+          ) : (
+            <div className="space-y-2">
+              {backlog.slice(0, 5).map((item) => (
+                <div key={item.id} className="flex items-center justify-between py-1">
+                  <span className="text-sm truncate mr-2">{item.name}</span>
+                  <Badge className={item.iceScore >= 7 ? "bg-red-100 text-red-700" : item.iceScore >= 4 ? "bg-amber-100 text-amber-700" : "bg-zinc-100 text-zinc-600"}>
+                    ICE: {item.iceScore}
+                  </Badge>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+    </div>
+  );
+}

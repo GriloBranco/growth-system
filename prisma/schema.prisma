@@ -1,0 +1,137 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model TeamMember {
+  id          Int          @id @default(autoincrement())
+  name        String
+  role        String?
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  sprintItems SprintItem[]
+
+  @@map("team_members")
+}
+
+model Nct {
+  id          Int          @id @default(autoincrement())
+  goal        String
+  metric      String
+  target      Float
+  current     Float        @default(0)
+  quarter     String
+  isActive    Boolean      @default(true) @map("is_active")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  sprintItems SprintItem[]
+  backlogItems BacklogItem[]
+
+  @@map("ncts")
+}
+
+model CalendarEvent {
+  id            Int      @id @default(autoincrement())
+  name          String
+  type          String   // test, break, milestone, marketing
+  states        String   // comma-separated: "TX,CA" or "ALL"
+  startDate     DateTime @map("start_date")
+  endDate       DateTime @map("end_date")
+  prepStartDate DateTime? @map("prep_start_date")
+  relevanceNote String?  @map("relevance_note")
+  isRecurring   Boolean  @default(true) @map("is_recurring")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@map("calendar_events")
+}
+
+model Sprint {
+  id               Int          @id @default(autoincrement())
+  name             String?
+  startDate        DateTime     @map("start_date")
+  endDate          DateTime     @map("end_date")
+  status           String       @default("active") // active, completed, archived
+  performanceNotes String?      @map("performance_notes")
+  transcriptText   String?      @map("transcript_text")
+  createdAt        DateTime     @default(now()) @map("created_at")
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+  items            SprintItem[]
+  carriedItems     SprintItem[] @relation("CarriedFrom")
+
+  @@map("sprints")
+}
+
+model SprintItem {
+  id                 Int         @id @default(autoincrement())
+  sprintId           Int         @map("sprint_id")
+  name               String
+  scope              String      // SEO, Ads, Social, Product Growth, Content, Email, Partnerships, Other
+  ownerId            Int?        @map("owner_id")
+  status             String      @default("not_started") // not_started, in_progress, review, done
+  definitionOfDone   String      @map("definition_of_done")
+  whyNow             String?     @map("why_now")
+  calendarUrgency    Int         @default(1) @map("calendar_urgency")
+  impact             Int         @default(1)
+  iceScore           Int         @default(1) @map("ice_score")
+  nctId              Int?        @map("nct_id")
+  deadline           DateTime?
+  sortOrder          Int         @default(0) @map("sort_order")
+  carriedFromSprintId Int?       @map("carried_from_sprint_id")
+  createdAt          DateTime    @default(now()) @map("created_at")
+  updatedAt          DateTime    @updatedAt @map("updated_at")
+
+  sprint             Sprint      @relation(fields: [sprintId], references: [id])
+  owner              TeamMember? @relation(fields: [ownerId], references: [id])
+  nct                Nct?        @relation(fields: [nctId], references: [id])
+  carriedFromSprint  Sprint?     @relation("CarriedFrom", fields: [carriedFromSprintId], references: [id])
+  tasks              SprintTask[]
+
+  @@map("sprint_items")
+}
+
+model SprintTask {
+  id           Int        @id @default(autoincrement())
+  sprintItemId Int        @map("sprint_item_id")
+  text         String
+  isDone       Boolean    @default(false) @map("is_done")
+  sortOrder    Int        @default(0) @map("sort_order")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  sprintItem   SprintItem @relation(fields: [sprintItemId], references: [id], onDelete: Cascade)
+
+  @@map("sprint_tasks")
+}
+
+model BacklogItem {
+  id                 Int      @id @default(autoincrement())
+  name               String
+  scope              String
+  description        String
+  calendarUrgency    Int      @default(1) @map("calendar_urgency")
+  impact             Int      @default(1)
+  iceScore           Int      @default(1) @map("ice_score")
+  nctId              Int?     @map("nct_id")
+  status             String   @default("pending") // pending, promoted_to_sprint, archived
+  promotedToSprintId Int?     @map("promoted_to_sprint_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  nct                Nct?     @relation(fields: [nctId], references: [id])
+
+  @@map("backlog_items")
+}
+
+model AppSetting {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String
+
+  @@map("app_settings")
+}
