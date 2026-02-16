@@ -2,50 +2,55 @@ import { prisma } from "@/lib/db";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const state = searchParams.get("state");
-  const type = searchParams.get("type");
-  const from = searchParams.get("from");
-  const to = searchParams.get("to");
-  const alerts = searchParams.get("alerts");
+  try {
+    const { searchParams } = new URL(request.url);
+    const state = searchParams.get("state");
+    const type = searchParams.get("type");
+    const from = searchParams.get("from");
+    const to = searchParams.get("to");
+    const alerts = searchParams.get("alerts");
 
-  const where: Record<string, unknown> = {};
+    const where: Record<string, unknown> = {};
 
-  if (state && state !== "ALL") {
-    where.OR = [
-      { states: { contains: state } },
-      { states: "ALL" },
-    ];
+    if (state && state !== "ALL") {
+      where.OR = [
+        { states: { contains: state } },
+        { states: "ALL" },
+      ];
+    }
+
+    if (type) {
+      where.type = type;
+    }
+
+    if (from || to) {
+      where.startDate = {};
+      if (from) (where.startDate as Record<string, unknown>).gte = new Date(from);
+      if (to) (where.startDate as Record<string, unknown>).lte = new Date(to);
+    }
+
+    // Alerts: events with prep windows opening in the next 30 days or events starting within 30 days
+    if (alerts === "true") {
+      const now = new Date();
+      const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      where.OR = [
+        { startDate: { gte: now, lte: thirtyDays } },
+        { prepStartDate: { gte: now, lte: thirtyDays } },
+        { prepStartDate: { lte: now }, startDate: { gte: now } },
+      ];
+      delete where.startDate;
+    }
+
+    const events = await prisma.calendarEvent.findMany({
+      where,
+      orderBy: { startDate: "asc" },
+    });
+
+    return NextResponse.json(events);
+  } catch (e) {
+    console.error("Calendar API error:", e);
+    return NextResponse.json({ error: String(e) }, { status: 500 });
   }
-
-  if (type) {
-    where.type = type;
-  }
-
-  if (from || to) {
-    where.startDate = {};
-    if (from) (where.startDate as Record<string, unknown>).gte = new Date(from);
-    if (to) (where.startDate as Record<string, unknown>).lte = new Date(to);
-  }
-
-  // Alerts: events with prep windows opening in the next 30 days or events starting within 30 days
-  if (alerts === "true") {
-    const now = new Date();
-    const thirtyDays = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    where.OR = [
-      { startDate: { gte: now, lte: thirtyDays } },
-      { prepStartDate: { gte: now, lte: thirtyDays } },
-      { prepStartDate: { lte: now }, startDate: { gte: now } },
-    ];
-    delete where.startDate;
-  }
-
-  const events = await prisma.calendarEvent.findMany({
-    where,
-    orderBy: { startDate: "asc" },
-  });
-
-  return NextResponse.json(events);
 }
 
 export async function POST(request: NextRequest) {
