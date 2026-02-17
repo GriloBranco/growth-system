@@ -116,7 +116,30 @@ export default function SprintsPage() {
   const activeSprint = sprints.find((s) => s.status === "active");
   const pastSprints = sprints.filter((s) => s.status !== "active");
 
+  // Optimistic update helper — mutates local sprint items instantly, then syncs
+  const optimisticItemUpdate = (id: number, updates: Partial<SprintItem>) => {
+    setSprints((prev) =>
+      prev.map((s) => ({
+        ...s,
+        items: s.items.map((i) => (i.id === id ? { ...i, ...updates } : i)),
+      }))
+    );
+  };
+
+  const optimisticTaskUpdate = (taskId: number, updates: Partial<SprintTask>) => {
+    setSprints((prev) =>
+      prev.map((s) => ({
+        ...s,
+        items: s.items.map((i) => ({
+          ...i,
+          tasks: i.tasks.map((t) => (t.id === taskId ? { ...t, ...updates } : t)),
+        })),
+      }))
+    );
+  };
+
   const updateStatus = async (id: number, status: string) => {
+    optimisticItemUpdate(id, { status });
     try {
       await fetch("/api/sprint-items", {
         method: "PATCH",
@@ -126,10 +149,16 @@ export default function SprintsPage() {
       load();
     } catch {
       toast("Failed to update status", "error");
+      load(); // revert on failure
     }
   };
 
   const updateIce = async (id: number, field: "calendarUrgency" | "impact", value: number) => {
+    // Optimistic: compute new ICE immediately
+    const item = activeSprint?.items.find((i) => i.id === id);
+    const urgency = field === "calendarUrgency" ? value : (item?.calendarUrgency ?? 1);
+    const impact = field === "impact" ? value : (item?.impact ?? 1);
+    optimisticItemUpdate(id, { [field]: value, iceScore: urgency * impact });
     try {
       await fetch("/api/sprint-items", {
         method: "PATCH",
@@ -140,10 +169,12 @@ export default function SprintsPage() {
       load();
     } catch {
       toast("Failed to update ICE", "error");
+      load();
     }
   };
 
   const toggleTask = async (taskId: number, isDone: boolean) => {
+    optimisticTaskUpdate(taskId, { isDone });
     try {
       await fetch("/api/sprint-tasks", {
         method: "PATCH",
@@ -153,6 +184,7 @@ export default function SprintsPage() {
       load();
     } catch {
       toast("Failed to update task", "error");
+      load();
     }
   };
 
