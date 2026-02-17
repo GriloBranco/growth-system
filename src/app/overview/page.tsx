@@ -42,6 +42,12 @@ interface Sprint {
   items: SprintItem[];
 }
 
+interface NctCommitment {
+  id: number;
+  name: string;
+  tasks: { id: number; isDone: boolean }[];
+}
+
 interface Nct {
   id: number;
   goal: string;
@@ -50,6 +56,7 @@ interface Nct {
   current: number;
   quarter: string;
   isActive: boolean;
+  commitments?: NctCommitment[];
 }
 
 interface CalendarEvent {
@@ -241,23 +248,38 @@ export default function OverviewPage() {
 
         {/* NCT Progress */}
         <Card>
-          <h3 className="font-medium mb-3">NCT Progress</h3>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-medium">NCT Progress</h3>
+            <a href="/ncts" className="text-xs text-blue-600 hover:underline">View all</a>
+          </div>
           {ncts.length === 0 ? (
             <p className="text-sm text-zinc-500">No active NCTs. Add them in Settings.</p>
           ) : (
             <div className="space-y-3">
-              {ncts.map((nct) => (
-                <div key={nct.id}>
-                  <div className="flex items-center justify-between mb-1">
-                    <p className="text-sm font-medium truncate mr-2">{nct.goal}</p>
-                    <span className="text-xs text-zinc-500 flex-shrink-0">{nct.quarter}</span>
+              {ncts.map((nct) => {
+                const commitCount = nct.commitments?.length || 0;
+                const taskCount = nct.commitments?.reduce((s, c) => s + c.tasks.length, 0) || 0;
+                const doneCount = nct.commitments?.reduce((s, c) => s + c.tasks.filter((t) => t.isDone).length, 0) || 0;
+                return (
+                  <div key={nct.id}>
+                    <div className="flex items-center justify-between mb-1">
+                      <p className="text-sm font-medium truncate mr-2">{nct.goal}</p>
+                      <span className="text-xs text-zinc-500 flex-shrink-0">{nct.quarter}</span>
+                    </div>
+                    <ProgressBar current={nct.current} target={nct.target} />
+                    <div className="flex items-center justify-between mt-0.5">
+                      <p className="text-xs text-zinc-500">
+                        {nct.current} / {nct.target} {nct.metric}
+                      </p>
+                      {commitCount > 0 && (
+                        <p className="text-xs text-zinc-400">
+                          {commitCount} commitments{taskCount > 0 ? `, ${doneCount}/${taskCount} tasks` : ""}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <ProgressBar current={nct.current} target={nct.target} />
-                  <p className="text-xs text-zinc-500 mt-0.5">
-                    {nct.current} / {nct.target} {nct.metric}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </Card>

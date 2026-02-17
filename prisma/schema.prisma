@@ -25,13 +25,47 @@ model Nct {
   target      Float
   current     Float        @default(0)
   quarter     String
+  objective   String?
+  description String?
   isActive    Boolean      @default(true) @map("is_active")
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
   sprintItems SprintItem[]
   backlogItems BacklogItem[]
+  commitments NctCommitment[]
 
   @@map("ncts")
+}
+
+model NctCommitment {
+  id          Int        @id @default(autoincrement())
+  nctId       Int        @map("nct_id")
+  name        String
+  type        String     // Quantitative, Think-It, Build-It, Launch-It
+  description String?
+  dri         String?
+  sortOrder   Int        @default(0) @map("sort_order")
+  createdAt   DateTime   @default(now()) @map("created_at")
+  updatedAt   DateTime   @updatedAt @map("updated_at")
+
+  nct         Nct        @relation(fields: [nctId], references: [id], onDelete: Cascade)
+  tasks       NctTask[]
+
+  @@map("nct_commitments")
+}
+
+model NctTask {
+  id           Int           @id @default(autoincrement())
+  commitmentId Int           @map("commitment_id")
+  text         String
+  isDone       Boolean       @default(false) @map("is_done")
+  sortOrder    Int           @default(0) @map("sort_order")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+
+  commitment   NctCommitment @relation(fields: [commitmentId], references: [id], onDelete: Cascade)
+
+  @@map("nct_tasks")
 }
 
 model CalendarEvent {

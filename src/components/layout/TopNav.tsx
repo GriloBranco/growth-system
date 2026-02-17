@@ -8,6 +8,7 @@ const tabs = [
   { name: "Weekly Kickoff", href: "/kickoff" },
   { name: "School Calendar", href: "/calendar" },
   { name: "Sprints", href: "/sprints" },
+  { name: "NCTs", href: "/ncts" },
   { name: "Settings", href: "/settings" },
 ];
 
