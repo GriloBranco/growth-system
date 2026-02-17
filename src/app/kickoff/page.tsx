@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Spinner } from "@/components/ui/Spinner";
+import { useToast } from "@/components/ui/Toast";
 import { SCOPES, SCOPE_COLORS, calculateIceScore } from "@/lib/utils";
 
 interface TeamMember { id: number; name: string; }
@@ -32,6 +34,7 @@ interface ProposedBacklog {
 }
 
 export default function KickoffPage() {
+  const { toast } = useToast();
   const [step, setStep] = useState(1);
   const [transcript, setTranscript] = useState("");
   const [processing, setProcessing] = useState(false);
@@ -46,13 +49,17 @@ export default function KickoffPage() {
   const [creating, setCreating] = useState(false);
 
   const loadContext = useCallback(async () => {
-    const [mRes, nRes] = await Promise.all([
-      fetch("/api/team-members"),
-      fetch("/api/ncts"),
-    ]);
-    setTeamMembers(await mRes.json());
-    setNcts((await nRes.json()).filter((n: Nct) => n.isActive));
-  }, []);
+    try {
+      const [mRes, nRes] = await Promise.all([
+        fetch("/api/team-members"),
+        fetch("/api/ncts"),
+      ]);
+      setTeamMembers(await mRes.json());
+      setNcts((await nRes.json()).filter((n: Nct) => n.isActive));
+    } catch {
+      toast("Failed to load team data", "error");
+    }
+  }, [toast]);
 
   useEffect(() => { loadContext(); }, [loadContext]);
 
@@ -74,9 +81,12 @@ export default function KickoffPage() {
         (data.sprint_items || []).map((item: ProposedItem) => ({ ...item, addToSprint: true }))
       );
       setBacklogItems(data.backlog_items || []);
+      toast("Transcript processed successfully");
       setStep(3);
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      toast(msg, "error");
     }
     setProcessing(false);
   };
@@ -99,7 +109,7 @@ export default function KickoffPage() {
     const item = sprintItems[index];
     const sprintCount = sprintItems.filter((i) => i.addToSprint).length;
     if (!item.addToSprint && sprintCount >= 4) {
-      alert("Max 4 sprint items. Move something to backlog to add this.");
+      toast("Max 4 sprint items. Move something to backlog first.", "error");
       return;
     }
     updateSprintItem(index, { addToSprint: !item.addToSprint });
@@ -107,90 +117,91 @@ export default function KickoffPage() {
 
   const startSprint = async () => {
     const sprint = sprintItems.filter((i) => i.addToSprint);
-    if (sprint.length === 0) { alert("Add at least one item to the sprint."); return; }
-    if (sprint.length > 4) { alert("Max 4 sprint items."); return; }
+    if (sprint.length === 0) { toast("Add at least one item to the sprint.", "error"); return; }
+    if (sprint.length > 4) { toast("Max 4 sprint items.", "error"); return; }
 
     setCreating(true);
 
-    // Check for active sprint
-    const activeRes = await fetch("/api/sprints?active=true");
-    const activeSprints = await activeRes.json();
+    try {
+      const activeRes = await fetch("/api/sprints?active=true");
+      const activeSprints = await activeRes.json();
 
-    let archiveCurrent = false;
-    if (activeSprints.length > 0) {
-      archiveCurrent = confirm(`You have an active sprint with ${activeSprints[0].items.length} items. Archive it and start a new one?`);
-      if (!archiveCurrent) { setCreating(false); return; }
-    }
+      let archiveCurrent = false;
+      if (activeSprints.length > 0) {
+        archiveCurrent = confirm(`You have an active sprint with ${activeSprints[0].items.length} items. Archive it and start a new one?`);
+        if (!archiveCurrent) { setCreating(false); return; }
+      }
 
-    // Create sprint
-    const sprintRes = await fetch("/api/sprints", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: sprintName || null,
-        startDate: sprintStart,
-        endDate: sprintEnd,
-        archiveCurrent,
-        transcriptText: transcript,
-      }),
-    });
-    const newSprint = await sprintRes.json();
-
-    // Add sprint items
-    for (const item of sprint) {
-      const ownerMember = teamMembers.find((m) => m.name.toLowerCase().includes(item.owner.toLowerCase()));
-      const nctMatch = item.suggested_nct_link
-        ? ncts.find((n) => n.goal.toLowerCase().includes(item.suggested_nct_link!.toLowerCase()))
-        : null;
-
-      await fetch("/api/sprint-items", {
+      const sprintRes = await fetch("/api/sprints", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sprintId: newSprint.id,
-          name: item.name,
-          scope: item.scope,
-          ownerId: ownerMember?.id || null,
-          definitionOfDone: item.definition_of_done,
-          whyNow: item.why_now,
-          calendarUrgency: item.calendar_urgency,
-          impact: item.impact,
-          nctId: nctMatch?.id || null,
-          deadline: item.suggested_deadline,
-          tasks: item.tasks,
+          name: sprintName || null,
+          startDate: sprintStart,
+          endDate: sprintEnd,
+          archiveCurrent,
+          transcriptText: transcript,
         }),
       });
+      const newSprint = await sprintRes.json();
+
+      for (const item of sprint) {
+        const ownerMember = teamMembers.find((m) => m.name.toLowerCase().includes(item.owner.toLowerCase()));
+        const nctMatch = item.suggested_nct_link
+          ? ncts.find((n) => n.goal.toLowerCase().includes(item.suggested_nct_link!.toLowerCase()))
+          : null;
+
+        await fetch("/api/sprint-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sprintId: newSprint.id,
+            name: item.name,
+            scope: item.scope,
+            ownerId: ownerMember?.id || null,
+            definitionOfDone: item.definition_of_done,
+            whyNow: item.why_now,
+            calendarUrgency: item.calendar_urgency,
+            impact: item.impact,
+            nctId: nctMatch?.id || null,
+            deadline: item.suggested_deadline,
+            tasks: item.tasks,
+          }),
+        });
+      }
+
+      const allBacklog = [
+        ...backlogItems,
+        ...sprintItems.filter((i) => !i.addToSprint).map((i) => ({
+          name: i.name, scope: i.scope, description: i.definition_of_done,
+          calendar_urgency: i.calendar_urgency, impact: i.impact, suggested_nct_link: i.suggested_nct_link,
+        })),
+      ];
+
+      for (const item of allBacklog) {
+        const nctMatch = item.suggested_nct_link
+          ? ncts.find((n) => n.goal.toLowerCase().includes(item.suggested_nct_link!.toLowerCase()))
+          : null;
+        await fetch("/api/backlog", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: item.name,
+            scope: item.scope,
+            description: item.description,
+            calendarUrgency: item.calendar_urgency,
+            impact: item.impact,
+            nctId: nctMatch?.id || null,
+          }),
+        });
+      }
+
+      toast("Sprint created successfully!");
+      window.location.href = "/sprints";
+    } catch {
+      toast("Failed to create sprint", "error");
+      setCreating(false);
     }
-
-    // Add backlog items + non-sprint items
-    const allBacklog = [
-      ...backlogItems,
-      ...sprintItems.filter((i) => !i.addToSprint).map((i) => ({
-        name: i.name, scope: i.scope, description: i.definition_of_done,
-        calendar_urgency: i.calendar_urgency, impact: i.impact, suggested_nct_link: i.suggested_nct_link,
-      })),
-    ];
-
-    for (const item of allBacklog) {
-      const nctMatch = item.suggested_nct_link
-        ? ncts.find((n) => n.goal.toLowerCase().includes(item.suggested_nct_link!.toLowerCase()))
-        : null;
-      await fetch("/api/backlog", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: item.name,
-          scope: item.scope,
-          description: item.description,
-          calendarUrgency: item.calendar_urgency,
-          impact: item.impact,
-          nctId: nctMatch?.id || null,
-        }),
-      });
-    }
-
-    setCreating(false);
-    window.location.href = "/sprints";
   };
 
   return (
@@ -234,14 +245,14 @@ export default function KickoffPage() {
             <button
               onClick={processTranscriptHandler}
               disabled={!transcript.trim() || processing}
-              className="px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50"
+              className="px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 flex items-center gap-2"
             >
-              Process Transcript
+              {processing && <Spinner size="sm" />}
+              {processing ? "Processing..." : "Process Transcript"}
             </button>
           </div>
           {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
 
-          {/* Manual option */}
           <div className="mt-4 pt-4 border-t border-zinc-100">
             <button onClick={() => { setSprintItems([]); setBacklogItems([]); setStep(3); }} className="text-sm text-zinc-500 hover:text-zinc-900">
               Or skip AI and create sprint items manually
@@ -254,7 +265,7 @@ export default function KickoffPage() {
       {step === 1 && processing && (
         <Card>
           <div className="flex items-center gap-3 py-4">
-            <div className="animate-spin h-5 w-5 border-2 border-zinc-300 border-t-zinc-900 rounded-full" />
+            <Spinner size="md" />
             <span className="text-sm text-zinc-600">Analyzing transcript...</span>
           </div>
         </Card>
@@ -405,8 +416,9 @@ export default function KickoffPage() {
               <button
                 onClick={startSprint}
                 disabled={creating || sprintItems.filter((i) => i.addToSprint).length === 0}
-                className="px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50"
+                className="px-4 py-2 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 flex items-center gap-2"
               >
+                {creating && <Spinner size="sm" />}
                 {creating ? "Creating Sprint..." : `Start Sprint (${sprintItems.filter((i) => i.addToSprint).length} items)`}
               </button>
             </div>

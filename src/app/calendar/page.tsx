@@ -4,6 +4,8 @@ import { useEffect, useState, useCallback } from "react";
 import { CalendarGrid } from "@/components/calendar/CalendarGrid";
 import { ListView } from "@/components/calendar/ListView";
 import { EventModal } from "@/components/calendar/EventModal";
+import { Spinner } from "@/components/ui/Spinner";
+import { useToast } from "@/components/ui/Toast";
 
 interface CalendarEvent {
   id: number;
@@ -20,6 +22,8 @@ interface CalendarEvent {
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 
 export default function CalendarPage() {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [view, setView] = useState<"grid" | "list">("grid");
   const [year, setYear] = useState(new Date().getFullYear());
@@ -30,12 +34,18 @@ export default function CalendarPage() {
   const [showNewModal, setShowNewModal] = useState(false);
 
   const load = useCallback(async () => {
-    const params = new URLSearchParams();
-    if (filterState !== "ALL") params.set("state", filterState);
-    if (filterType) params.set("type", filterType);
-    const res = await fetch(`/api/calendar?${params}`);
-    setEvents(await res.json());
-  }, [filterState, filterType]);
+    try {
+      const params = new URLSearchParams();
+      if (filterState !== "ALL") params.set("state", filterState);
+      if (filterType) params.set("type", filterType);
+      const res = await fetch(`/api/calendar?${params}`);
+      setEvents(await res.json());
+    } catch {
+      toast("Failed to load calendar events", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [filterState, filterType, toast]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -50,26 +60,46 @@ export default function CalendarPage() {
   };
 
   const saveEvent = async (event: { id?: number; name: string; type: string; states: string; startDate: string; endDate: string; prepStartDate: string | null; relevanceNote: string | null }) => {
-    if (event.id) {
-      await fetch("/api/calendar", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(event),
-      });
-    } else {
-      await fetch("/api/calendar", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(event),
-      });
+    try {
+      if (event.id) {
+        await fetch("/api/calendar", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(event),
+        });
+        toast("Event updated");
+      } else {
+        await fetch("/api/calendar", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(event),
+        });
+        toast("Event created");
+      }
+      load();
+    } catch {
+      toast("Failed to save event", "error");
     }
-    load();
   };
 
   const deleteEvent = async (id: number) => {
-    await fetch(`/api/calendar?id=${id}`, { method: "DELETE" });
-    load();
+    try {
+      await fetch(`/api/calendar?id=${id}`, { method: "DELETE" });
+      toast("Event deleted");
+      load();
+    } catch {
+      toast("Failed to delete event", "error");
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Spinner size="md" />
+        <span className="ml-3 text-sm text-zinc-500">Loading calendar...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">

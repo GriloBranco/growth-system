@@ -3,7 +3,11 @@
 import { useEffect, useState, useCallback } from "react";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
+import { Spinner } from "@/components/ui/Spinner";
+import { useToast } from "@/components/ui/Toast";
 import { SprintCard } from "@/components/sprints/SprintCard";
+import { KanbanBoard } from "@/components/sprints/KanbanBoard";
+import { IceTable } from "@/components/sprints/IceTable";
 import { daysRemaining, formatDateRange, SCOPES, STATUS_LABELS } from "@/lib/utils";
 
 interface SprintTask {
@@ -51,29 +55,61 @@ interface Nct {
   goal: string;
 }
 
+interface SprintMetric {
+  id: number;
+  name: string | null;
+  startDate: string;
+  endDate: string;
+  totalItems: number;
+  completedItems: number;
+  totalTasks: number;
+  completedTasks: number;
+  itemCompletionRate: number;
+  taskCompletionRate: number;
+}
+
+type ViewMode = "cards" | "kanban" | "ice";
+
 export default function SprintsPage() {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
   const [sprints, setSprints] = useState<Sprint[]>([]);
   const [teamMembers, setTeamMembers] = useState<TeamMember[]>([]);
   const [ncts, setNcts] = useState<Nct[]>([]);
+  const [metrics, setMetrics] = useState<SprintMetric[]>([]);
+  const [trend, setTrend] = useState<"improving" | "declining" | "stable">("stable");
+  const [viewMode, setViewMode] = useState<ViewMode>("cards");
   const [showAddItem, setShowAddItem] = useState(false);
   const [showComplete, setShowComplete] = useState(false);
   const [completionNotes, setCompletionNotes] = useState("");
   const [itemDispositions, setItemDispositions] = useState<Record<number, "carry" | "backlog">>({});
+  const [savingItem, setSavingItem] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [newItem, setNewItem] = useState({
     name: "", scope: "Other", ownerId: "", definitionOfDone: "", whyNow: "",
     calendarUrgency: "1", impact: "1", nctId: "", deadline: "", tasks: "",
   });
 
   const load = useCallback(async () => {
-    const [sprintsRes, membersRes, nctsRes] = await Promise.all([
-      fetch("/api/sprints"),
-      fetch("/api/team-members"),
-      fetch("/api/ncts"),
-    ]);
-    setSprints(await sprintsRes.json());
-    setTeamMembers(await membersRes.json());
-    setNcts((await nctsRes.json()).filter((n: Nct & { isActive: boolean }) => n.isActive));
-  }, []);
+    try {
+      const [sprintsRes, membersRes, nctsRes, metricsRes] = await Promise.all([
+        fetch("/api/sprints"),
+        fetch("/api/team-members"),
+        fetch("/api/ncts"),
+        fetch("/api/sprints/metrics"),
+      ]);
+      setSprints(await sprintsRes.json());
+      setTeamMembers(await membersRes.json());
+      setNcts((await nctsRes.json()).filter((n: Nct & { isActive: boolean }) => n.isActive));
+      const metricsData = await metricsRes.json();
+      setMetrics(metricsData.metrics || []);
+      setTrend(metricsData.trend || "stable");
+    } catch {
+      toast("Failed to load sprints data", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -81,93 +117,148 @@ export default function SprintsPage() {
   const pastSprints = sprints.filter((s) => s.status !== "active");
 
   const updateStatus = async (id: number, status: string) => {
-    await fetch("/api/sprint-items", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, status }),
-    });
-    load();
+    try {
+      await fetch("/api/sprint-items", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status }),
+      });
+      load();
+    } catch {
+      toast("Failed to update status", "error");
+    }
+  };
+
+  const updateIce = async (id: number, field: "calendarUrgency" | "impact", value: number) => {
+    try {
+      await fetch("/api/sprint-items", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, [field]: value }),
+      });
+      toast("ICE score updated");
+      load();
+    } catch {
+      toast("Failed to update ICE", "error");
+    }
   };
 
   const toggleTask = async (taskId: number, isDone: boolean) => {
-    await fetch("/api/sprint-tasks", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: taskId, isDone }),
-    });
-    load();
+    try {
+      await fetch("/api/sprint-tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId, isDone }),
+      });
+      load();
+    } catch {
+      toast("Failed to update task", "error");
+    }
   };
 
   const addTask = async (itemId: number, text: string) => {
-    await fetch("/api/sprint-tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sprintItemId: itemId, text }),
-    });
-    load();
+    try {
+      await fetch("/api/sprint-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sprintItemId: itemId, text }),
+      });
+      load();
+    } catch {
+      toast("Failed to add task", "error");
+    }
   };
 
   const deleteTask = async (taskId: number) => {
-    await fetch(`/api/sprint-tasks?id=${taskId}`, { method: "DELETE" });
-    load();
+    try {
+      await fetch(`/api/sprint-tasks?id=${taskId}`, { method: "DELETE" });
+      load();
+    } catch {
+      toast("Failed to delete task", "error");
+    }
   };
 
   const addItem = async () => {
     if (!activeSprint || !newItem.name.trim()) return;
     if (activeSprint.items.length >= 4) {
-      alert("Max 4 sprint items. Move something to backlog to add this.");
+      toast("Max 4 sprint items. Move something to backlog first.", "error");
       return;
     }
-    await fetch("/api/sprint-items", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sprintId: activeSprint.id,
-        name: newItem.name,
-        scope: newItem.scope,
-        ownerId: newItem.ownerId ? Number(newItem.ownerId) : null,
-        definitionOfDone: newItem.definitionOfDone,
-        whyNow: newItem.whyNow || null,
-        calendarUrgency: Number(newItem.calendarUrgency),
-        impact: Number(newItem.impact),
-        nctId: newItem.nctId ? Number(newItem.nctId) : null,
-        deadline: newItem.deadline || null,
-        tasks: newItem.tasks ? newItem.tasks.split("\n").filter(Boolean) : [],
-      }),
-    });
-    setNewItem({ name: "", scope: "Other", ownerId: "", definitionOfDone: "", whyNow: "", calendarUrgency: "1", impact: "1", nctId: "", deadline: "", tasks: "" });
-    setShowAddItem(false);
-    load();
+    setSavingItem(true);
+    try {
+      await fetch("/api/sprint-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sprintId: activeSprint.id,
+          name: newItem.name,
+          scope: newItem.scope,
+          ownerId: newItem.ownerId ? Number(newItem.ownerId) : null,
+          definitionOfDone: newItem.definitionOfDone,
+          whyNow: newItem.whyNow || null,
+          calendarUrgency: Number(newItem.calendarUrgency),
+          impact: Number(newItem.impact),
+          nctId: newItem.nctId ? Number(newItem.nctId) : null,
+          deadline: newItem.deadline || null,
+          tasks: newItem.tasks ? newItem.tasks.split("\n").filter(Boolean) : [],
+        }),
+      });
+      setNewItem({ name: "", scope: "Other", ownerId: "", definitionOfDone: "", whyNow: "", calendarUrgency: "1", impact: "1", nctId: "", deadline: "", tasks: "" });
+      setShowAddItem(false);
+      toast("Sprint item added");
+      load();
+    } catch {
+      toast("Failed to add item", "error");
+    } finally {
+      setSavingItem(false);
+    }
   };
 
   const completeSprint = async () => {
     if (!activeSprint) return;
-    const incompleteItems = activeSprint.items.filter((i) => i.status !== "done");
-    const carryOverIds = incompleteItems.filter((i) => itemDispositions[i.id] === "carry").map((i) => i.id);
-    const backlogIds = incompleteItems.filter((i) => itemDispositions[i.id] !== "carry").map((i) => i.id);
+    setCompleting(true);
+    try {
+      const incompleteItems = activeSprint.items.filter((i) => i.status !== "done");
+      const carryOverIds = incompleteItems.filter((i) => itemDispositions[i.id] === "carry").map((i) => i.id);
+      const backlogIds = incompleteItems.filter((i) => itemDispositions[i.id] !== "carry").map((i) => i.id);
 
-    await fetch("/api/sprints", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        id: activeSprint.id,
-        complete: true,
-        performanceNotes: completionNotes,
-        carryOverItemIds: carryOverIds,
-        moveToBacklogItemIds: backlogIds,
-      }),
-    });
-    setShowComplete(false);
-    setCompletionNotes("");
-    setItemDispositions({});
-    load();
+      await fetch("/api/sprints", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: activeSprint.id,
+          complete: true,
+          performanceNotes: completionNotes,
+          carryOverItemIds: carryOverIds,
+          moveToBacklogItemIds: backlogIds,
+        }),
+      });
+      setShowComplete(false);
+      setCompletionNotes("");
+      setItemDispositions({});
+      toast("Sprint completed!");
+      load();
+    } catch {
+      toast("Failed to complete sprint", "error");
+    } finally {
+      setCompleting(false);
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Spinner size="md" />
+        <span className="ml-3 text-sm text-zinc-500">Loading sprints...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Sprints</h1>
 
-      {/* Current Sprint */}
+      {/* Active Sprint */}
       {activeSprint ? (
         <Card className="p-0">
           <div className="flex items-center justify-between p-4 border-b border-zinc-100">
@@ -178,7 +269,21 @@ export default function SprintsPage() {
                 <span className="ml-2">{daysRemaining(activeSprint.endDate)} days remaining</span>
               </p>
             </div>
-            <div className="flex gap-2">
+            <div className="flex items-center gap-2">
+              {/* View toggle */}
+              <div className="flex border border-zinc-200 rounded-md overflow-hidden">
+                {(["cards", "kanban", "ice"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setViewMode(mode)}
+                    className={`px-3 py-1.5 text-xs font-medium ${
+                      viewMode === mode ? "bg-zinc-900 text-white" : "hover:bg-zinc-50 text-zinc-600"
+                    }`}
+                  >
+                    {mode === "cards" ? "Cards" : mode === "kanban" ? "Kanban" : "ICE Table"}
+                  </button>
+                ))}
+              </div>
               <button onClick={() => setShowAddItem(true)} className="px-3 py-1.5 text-sm border border-zinc-200 rounded-md hover:bg-zinc-50">
                 Add Item
               </button>
@@ -189,10 +294,8 @@ export default function SprintsPage() {
                     const dispositions: Record<number, "carry" | "backlog"> = {};
                     incompleteItems.forEach((i) => { dispositions[i.id] = "backlog"; });
                     setItemDispositions(dispositions);
-                    setShowComplete(true);
-                  } else {
-                    setShowComplete(true);
                   }
+                  setShowComplete(true);
                 }}
                 className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800"
               >
@@ -201,21 +304,42 @@ export default function SprintsPage() {
             </div>
           </div>
 
-          <div className="p-4 space-y-3">
+          <div className="p-4">
             {activeSprint.items.length === 0 && (
               <p className="text-sm text-zinc-500 text-center py-4">No items yet. Add items or start a Weekly Kickoff.</p>
             )}
-            {activeSprint.items.map((item) => (
-              <SprintCard
-                key={item.id}
-                item={item}
-                expanded
+
+            {viewMode === "cards" && (
+              <div className="space-y-3">
+                {activeSprint.items.map((item) => (
+                  <SprintCard
+                    key={item.id}
+                    item={item}
+                    expanded
+                    onStatusChange={updateStatus}
+                    onTaskToggle={toggleTask}
+                    onTaskAdd={addTask}
+                    onTaskDelete={deleteTask}
+                  />
+                ))}
+              </div>
+            )}
+
+            {viewMode === "kanban" && (
+              <KanbanBoard
+                items={activeSprint.items}
                 onStatusChange={updateStatus}
                 onTaskToggle={toggleTask}
-                onTaskAdd={addTask}
-                onTaskDelete={deleteTask}
               />
-            ))}
+            )}
+
+            {viewMode === "ice" && (
+              <IceTable
+                items={activeSprint.items}
+                onStatusChange={updateStatus}
+                onIceUpdate={updateIce}
+              />
+            )}
           </div>
         </Card>
       ) : (
@@ -271,7 +395,9 @@ export default function SprintsPage() {
             </select>
             <div className="flex justify-end gap-2 pt-2">
               <button onClick={() => setShowAddItem(false)} className="px-3 py-1.5 text-sm border border-zinc-200 rounded-md">Cancel</button>
-              <button onClick={addItem} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md">Add</button>
+              <button onClick={addItem} disabled={savingItem} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md disabled:opacity-50 flex items-center gap-2">
+                {savingItem && <Spinner size="sm" />} Add
+              </button>
             </div>
           </div>
         </div>
@@ -288,7 +414,7 @@ export default function SprintsPage() {
                 <p className="text-sm text-zinc-600">What should happen with incomplete items?</p>
                 {activeSprint.items.filter((i) => i.status !== "done").map((item) => (
                   <div key={item.id} className="flex items-center justify-between py-2 px-3 bg-zinc-50 rounded-md">
-                    <span className="text-sm">{item.name} <Badge className={`ml-1 ${STATUS_LABELS[item.status] ? "" : ""}bg-zinc-100 text-zinc-600`}>{STATUS_LABELS[item.status]}</Badge></span>
+                    <span className="text-sm">{item.name} <Badge className="ml-1 bg-zinc-100 text-zinc-600">{STATUS_LABELS[item.status]}</Badge></span>
                     <select
                       value={itemDispositions[item.id] || "backlog"}
                       onChange={(e) => setItemDispositions({ ...itemDispositions, [item.id]: e.target.value as "carry" | "backlog" })}
@@ -315,9 +441,59 @@ export default function SprintsPage() {
 
             <div className="flex justify-end gap-2">
               <button onClick={() => setShowComplete(false)} className="px-3 py-1.5 text-sm border border-zinc-200 rounded-md">Cancel</button>
-              <button onClick={completeSprint} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md">Complete Sprint</button>
+              <button onClick={completeSprint} disabled={completing} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md disabled:opacity-50 flex items-center gap-2">
+                {completing && <Spinner size="sm" />} Complete Sprint
+              </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Sprint Velocity Metrics */}
+      {metrics.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-medium">Sprint Velocity</h2>
+            <Badge className={
+              trend === "improving" ? "bg-emerald-100 text-emerald-700" :
+              trend === "declining" ? "bg-red-100 text-red-700" :
+              "bg-zinc-100 text-zinc-600"
+            }>
+              {trend === "improving" ? "Improving" : trend === "declining" ? "Declining" : "Stable"}
+            </Badge>
+          </div>
+          <Card className="p-0">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-200">
+                  <th className="text-left py-2.5 px-4 font-medium text-zinc-500">Sprint</th>
+                  <th className="text-left py-2.5 px-4 font-medium text-zinc-500">Dates</th>
+                  <th className="text-center py-2.5 px-4 font-medium text-zinc-500">Items</th>
+                  <th className="text-center py-2.5 px-4 font-medium text-zinc-500">Tasks</th>
+                  <th className="text-center py-2.5 px-4 font-medium text-zinc-500">Completion</th>
+                </tr>
+              </thead>
+              <tbody>
+                {metrics.map((m) => (
+                  <tr key={m.id} className="border-b border-zinc-50 hover:bg-zinc-50/50">
+                    <td className="py-2.5 px-4 font-medium">{m.name || `Sprint #${m.id}`}</td>
+                    <td className="py-2.5 px-4 text-zinc-500">{formatDateRange(m.startDate, m.endDate)}</td>
+                    <td className="py-2.5 px-4 text-center">{m.completedItems}/{m.totalItems}</td>
+                    <td className="py-2.5 px-4 text-center">{m.completedTasks}/{m.totalTasks}</td>
+                    <td className="py-2.5 px-4 text-center">
+                      <Badge className={
+                        m.taskCompletionRate >= 80 ? "bg-emerald-100 text-emerald-700" :
+                        m.taskCompletionRate >= 50 ? "bg-amber-100 text-amber-700" :
+                        "bg-red-100 text-red-700"
+                      }>
+                        {m.taskCompletionRate}%
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
         </div>
       )}
 
@@ -358,7 +534,7 @@ export default function SprintsPage() {
                               {item.status === "done" ? "\u2713" : "\u2717"} {item.name}
                             </span>
                           </div>
-                          <Badge className={STATUS_LABELS[item.status] ? "bg-zinc-100 text-zinc-600" : ""}>{STATUS_LABELS[item.status]}</Badge>
+                          <Badge className="bg-zinc-100 text-zinc-600">{STATUS_LABELS[item.status]}</Badge>
                         </div>
                       ))}
                     </div>

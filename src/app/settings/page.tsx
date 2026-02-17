@@ -2,6 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { Card } from "@/components/ui/Card";
+import { Spinner } from "@/components/ui/Spinner";
+import { useToast } from "@/components/ui/Toast";
 
 interface TeamMember {
   id: number;
@@ -20,6 +22,8 @@ interface Nct {
 }
 
 export default function SettingsPage() {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [ncts, setNcts] = useState<Nct[]>([]);
   const [settings, setSettings] = useState<Record<string, string>>({});
@@ -29,67 +33,107 @@ export default function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [sheetsUrl, setSheetsUrl] = useState("");
+  const [syncing, setSyncing] = useState(false);
 
   const load = useCallback(async () => {
-    const [membersRes, nctsRes, settingsRes] = await Promise.all([
-      fetch("/api/team-members"),
-      fetch("/api/ncts"),
-      fetch("/api/settings"),
-    ]);
-    setMembers(await membersRes.json());
-    setNcts(await nctsRes.json());
-    const s = await settingsRes.json();
-    setSettings(s);
-    setApiKey(s.google_ai_api_key || "");
-  }, []);
+    try {
+      const [membersRes, nctsRes, settingsRes] = await Promise.all([
+        fetch("/api/team-members"),
+        fetch("/api/ncts"),
+        fetch("/api/settings"),
+      ]);
+      setMembers(await membersRes.json());
+      setNcts(await nctsRes.json());
+      const s = await settingsRes.json();
+      setSettings(s);
+      setApiKey(s.google_ai_api_key || "");
+      setSheetsUrl(s.google_sheets_url || "");
+    } catch {
+      toast("Failed to load settings", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
 
   useEffect(() => { load(); }, [load]);
 
   const addMember = async () => {
     if (!newMember.name.trim()) return;
-    await fetch("/api/team-members", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(newMember),
-    });
-    setNewMember({ name: "", role: "" });
-    load();
+    setSaving(true);
+    try {
+      await fetch("/api/team-members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newMember),
+      });
+      setNewMember({ name: "", role: "" });
+      toast("Team member added");
+      load();
+    } catch {
+      toast("Failed to add member", "error");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const removeMember = async (id: number) => {
-    await fetch(`/api/team-members?id=${id}`, { method: "DELETE" });
-    load();
+    try {
+      await fetch(`/api/team-members?id=${id}`, { method: "DELETE" });
+      toast("Member removed");
+      load();
+    } catch {
+      toast("Failed to remove member", "error");
+    }
   };
 
   const updateNctCurrent = async (id: number, current: string) => {
-    await fetch("/api/ncts", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, current }),
-    });
-    load();
+    try {
+      await fetch("/api/ncts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, current }),
+      });
+      load();
+    } catch {
+      toast("Failed to update NCT", "error");
+    }
   };
 
   const addNct = async () => {
     if (!newNct.goal.trim() || !newNct.metric.trim() || !newNct.target) return;
-    await fetch("/api/ncts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(newNct),
-    });
-    setNewNct({ goal: "", metric: "", target: "", current: "0", quarter: "Q1 2026" });
-    setShowAddNct(false);
-    load();
+    setSaving(true);
+    try {
+      await fetch("/api/ncts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(newNct),
+      });
+      setNewNct({ goal: "", metric: "", target: "", current: "0", quarter: "Q1 2026" });
+      setShowAddNct(false);
+      toast("NCT added");
+      load();
+    } catch {
+      toast("Failed to add NCT", "error");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const archiveQuarter = async (quarter: string) => {
     if (!confirm(`Archive all NCTs for ${quarter}?`)) return;
-    await fetch("/api/ncts", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archiveQuarter: quarter }),
-    });
-    load();
+    try {
+      await fetch("/api/ncts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ archiveQuarter: quarter }),
+      });
+      toast(`Archived ${quarter} NCTs`);
+      load();
+    } catch {
+      toast("Failed to archive", "error");
+    }
   };
 
   const parseCsvLine = (line: string): string[] => {
@@ -117,21 +161,17 @@ export default function SettingsPage() {
     const lines = text.split(/\r?\n/);
     const parsed = lines.map((l) => parseCsvLine(l));
 
-    // Try to detect CoGrader NCT spreadsheet format (has "Narratives" and "KR" sections)
     const narrativesRowIdx = parsed.findIndex((row) => row.some((c) => c.toLowerCase() === "narratives"));
 
     if (narrativesRowIdx >= 0) {
-      // CoGrader NCT format: extract Narratives with their KRs
-      // Find the header row after "Narratives" (has "Name" and "KR")
       const headerIdx = parsed.findIndex((row, i) => i > narrativesRowIdx && row.some((c) => c.toLowerCase() === "name") && row.some((c) => c.toLowerCase() === "kr"));
-      if (headerIdx < 0) { alert("Could not find Name/KR header row in the Narratives section."); return; }
+      if (headerIdx < 0) { toast("Could not find Name/KR header row in the Narratives section.", "error"); return; }
 
       const headerRow = parsed[headerIdx];
       const nameCol = headerRow.findIndex((c) => c.toLowerCase() === "name");
       const descCol = headerRow.findIndex((c) => c.toLowerCase().includes("description"));
       const krCol = headerRow.findIndex((c) => c.toLowerCase() === "kr");
 
-      // Read rows until we hit "Commitments" or an empty section
       const rows: { goal: string; metric: string; target: string; current: string; quarter: string }[] = [];
       for (let i = headerIdx + 1; i < parsed.length; i++) {
         const row = parsed[i];
@@ -141,8 +181,6 @@ export default function SettingsPage() {
 
         const description = descCol >= 0 ? (row[descCol] || "") : "";
         const kr = row[krCol >= 0 ? krCol : 6] || "";
-
-        // Parse KR to extract target number
         const numMatch = kr.match(/([\d,.]+)/);
         const target = numMatch ? numMatch[1].replace(/,/g, "") : "1";
         const metric = kr || name;
@@ -151,20 +189,20 @@ export default function SettingsPage() {
         rows.push({ goal, metric, target, current: "0", quarter: "Q1 2026" });
       }
 
-      if (rows.length === 0) { alert("No narratives found in the spreadsheet."); return; }
+      if (rows.length === 0) { toast("No narratives found in the spreadsheet.", "error"); return; }
 
       await fetch("/api/ncts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ import: true, rows }),
       });
+      toast(`Imported ${rows.length} NCTs`);
       load();
       return;
     }
 
-    // Fallback: standard CSV with columns goal, metric, target, current, quarter
     const nonEmpty = parsed.filter((row) => row.some((c) => c));
-    if (nonEmpty.length < 2) { alert("CSV must have a header row and at least one data row."); return; }
+    if (nonEmpty.length < 2) { toast("CSV must have a header row and at least one data row.", "error"); return; }
 
     const header = nonEmpty[0].map((h) => h.toLowerCase().replace(/[^a-z]/g, ""));
     const goalIdx = header.findIndex((h) => h.includes("goal") || h.includes("description") || h.includes("name"));
@@ -181,23 +219,32 @@ export default function SettingsPage() {
       quarter: parts[quarterIdx >= 0 ? quarterIdx : 4] || "Q1 2026",
     })).filter((r) => r.goal && r.metric && r.target);
 
-    if (rows.length === 0) { alert("No valid rows found. CSV should have columns: goal, metric, target, current, quarter"); return; }
+    if (rows.length === 0) { toast("No valid rows found. CSV should have columns: goal, metric, target, current, quarter", "error"); return; }
 
     await fetch("/api/ncts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ import: true, rows }),
     });
+    toast(`Imported ${rows.length} NCTs`);
     load();
   };
 
   const saveApiKey = async () => {
-    await fetch("/api/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ google_ai_api_key: apiKey }),
-    });
-    setTestResult(null);
+    setSaving(true);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ google_ai_api_key: apiKey }),
+      });
+      setTestResult(null);
+      toast("API key saved");
+    } catch {
+      toast("Failed to save API key", "error");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const testConnection = async () => {
@@ -218,14 +265,50 @@ export default function SettingsPage() {
   };
 
   const updateStates = async (state: string, checked: boolean) => {
-    const current = (settings.tracked_states || "TX,CA,FL").split(",").filter(Boolean);
-    const next = checked ? [...current, state] : current.filter((s) => s !== state);
-    await fetch("/api/settings", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tracked_states: next.join(",") }),
-    });
-    load();
+    try {
+      const current = (settings.tracked_states || "TX,CA,FL").split(",").filter(Boolean);
+      const next = checked ? [...current, state] : current.filter((s) => s !== state);
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tracked_states: next.join(",") }),
+      });
+      load();
+    } catch {
+      toast("Failed to update states", "error");
+    }
+  };
+
+  const saveSheetsUrl = async () => {
+    setSaving(true);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ google_sheets_url: sheetsUrl }),
+      });
+      toast("Sheets URL saved");
+      load();
+    } catch {
+      toast("Failed to save URL", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const syncFromSheets = async () => {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/ncts/sync-sheets", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      toast(`Synced ${data.count} NCTs from Google Sheets`);
+      load();
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Sync failed", "error");
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const trackedStates = (settings.tracked_states || "TX,CA,FL").split(",");
@@ -233,6 +316,15 @@ export default function SettingsPage() {
   const activeNcts = ncts.filter((n) => n.isActive);
   const archivedNcts = ncts.filter((n) => !n.isActive);
   const quarters = [...new Set(activeNcts.map((n) => n.quarter))];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Spinner size="md" />
+        <span className="ml-3 text-sm text-zinc-500">Loading settings...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -268,7 +360,9 @@ export default function SettingsPage() {
               <input placeholder="Quarter" className="px-3 py-1.5 text-sm border border-zinc-200 rounded-md" value={newNct.quarter} onChange={(e) => setNewNct({ ...newNct, quarter: e.target.value })} />
             </div>
             <div className="flex gap-2">
-              <button onClick={addNct} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md">Save</button>
+              <button onClick={addNct} disabled={saving} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md disabled:opacity-50 flex items-center gap-2">
+                {saving && <Spinner size="sm" />} Save
+              </button>
               <button onClick={() => setShowAddNct(false)} className="px-3 py-1.5 text-sm border border-zinc-200 rounded-md">Cancel</button>
             </div>
           </div>
@@ -325,6 +419,34 @@ export default function SettingsPage() {
         )}
       </Card>
 
+      {/* Google Sheets NCT Sync */}
+      <Card>
+        <h2 className="text-lg font-medium mb-4">Google Sheets NCT Sync</h2>
+        <p className="text-sm text-zinc-500 mb-3">
+          Sync NCTs from a public Google Sheet. The sheet should have columns for Name, Description, and KR (Key Result).
+          Your Google AI API key must have the Sheets API enabled in the same GCP project.
+        </p>
+        <div className="flex gap-2 mb-3">
+          <input
+            type="text"
+            placeholder="https://docs.google.com/spreadsheets/d/..."
+            className="flex-1 px-3 py-1.5 text-sm border border-zinc-200 rounded-md"
+            value={sheetsUrl}
+            onChange={(e) => setSheetsUrl(e.target.value)}
+          />
+          <button onClick={saveSheetsUrl} disabled={saving} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50">
+            Save URL
+          </button>
+          <button onClick={syncFromSheets} disabled={syncing || !settings.google_sheets_url} className="px-3 py-1.5 text-sm border border-zinc-200 rounded-md hover:bg-zinc-50 disabled:opacity-50 flex items-center gap-2">
+            {syncing && <Spinner size="sm" />}
+            {syncing ? "Syncing..." : "Sync from Sheets"}
+          </button>
+        </div>
+        {settings.google_sheets_last_sync && (
+          <p className="text-xs text-zinc-400">Last synced: {new Date(settings.google_sheets_last_sync).toLocaleString()}</p>
+        )}
+      </Card>
+
       {/* Team Members */}
       <Card>
         <h2 className="text-lg font-medium mb-4">Team Members</h2>
@@ -342,7 +464,9 @@ export default function SettingsPage() {
         <div className="flex gap-2">
           <input placeholder="Name" className="flex-1 px-3 py-1.5 text-sm border border-zinc-200 rounded-md" value={newMember.name} onChange={(e) => setNewMember({ ...newMember, name: e.target.value })} />
           <input placeholder="Role (optional)" className="flex-1 px-3 py-1.5 text-sm border border-zinc-200 rounded-md" value={newMember.role} onChange={(e) => setNewMember({ ...newMember, role: e.target.value })} />
-          <button onClick={addMember} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800">Add</button>
+          <button onClick={addMember} disabled={saving} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50 flex items-center gap-2">
+            {saving && <Spinner size="sm" />} Add
+          </button>
         </div>
       </Card>
 
@@ -375,8 +499,9 @@ export default function SettingsPage() {
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
-          <button onClick={saveApiKey} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800">Save</button>
-          <button onClick={testConnection} disabled={testing || !apiKey} className="px-3 py-1.5 text-sm border border-zinc-200 rounded-md hover:bg-zinc-50 disabled:opacity-50">
+          <button onClick={saveApiKey} disabled={saving} className="px-3 py-1.5 text-sm bg-zinc-900 text-white rounded-md hover:bg-zinc-800 disabled:opacity-50">Save</button>
+          <button onClick={testConnection} disabled={testing || !apiKey} className="px-3 py-1.5 text-sm border border-zinc-200 rounded-md hover:bg-zinc-50 disabled:opacity-50 flex items-center gap-2">
+            {testing && <Spinner size="sm" />}
             {testing ? "Testing..." : "Test Connection"}
           </button>
         </div>

@@ -5,6 +5,8 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { ProgressBar } from "@/components/ui/ProgressBar";
 import { SprintCard } from "@/components/sprints/SprintCard";
+import { Spinner } from "@/components/ui/Spinner";
+import { useToast } from "@/components/ui/Toast";
 import { daysUntil, formatDate, formatDateRange, EVENT_TYPE_COLORS } from "@/lib/utils";
 
 interface SprintTask {
@@ -69,58 +71,91 @@ interface BacklogItem {
 }
 
 export default function OverviewPage() {
+  const { toast } = useToast();
+  const [loading, setLoading] = useState(true);
   const [activeSprint, setActiveSprint] = useState<Sprint | null>(null);
   const [ncts, setNcts] = useState<Nct[]>([]);
   const [alerts, setAlerts] = useState<CalendarEvent[]>([]);
   const [backlog, setBacklog] = useState<BacklogItem[]>([]);
 
   const load = useCallback(async () => {
-    const [sprintRes, nctsRes, alertsRes, backlogRes] = await Promise.all([
-      fetch("/api/sprints?active=true"),
-      fetch("/api/ncts"),
-      fetch("/api/calendar?alerts=true"),
-      fetch("/api/backlog"),
-    ]);
-    const sprints = await sprintRes.json();
-    setActiveSprint(sprints[0] || null);
-    setNcts((await nctsRes.json()).filter((n: Nct) => n.isActive));
-    setAlerts(await alertsRes.json());
-    setBacklog(await backlogRes.json());
-  }, []);
+    try {
+      const [sprintRes, nctsRes, alertsRes, backlogRes] = await Promise.all([
+        fetch("/api/sprints?active=true"),
+        fetch("/api/ncts"),
+        fetch("/api/calendar?alerts=true"),
+        fetch("/api/backlog"),
+      ]);
+      const sprints = await sprintRes.json();
+      setActiveSprint(sprints[0] || null);
+      setNcts((await nctsRes.json()).filter((n: Nct) => n.isActive));
+      setAlerts(await alertsRes.json());
+      setBacklog(await backlogRes.json());
+    } catch {
+      toast("Failed to load data", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [toast]);
 
   useEffect(() => { load(); }, [load]);
 
   const updateStatus = async (id: number, status: string) => {
-    await fetch("/api/sprint-items", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, status }),
-    });
-    load();
+    try {
+      await fetch("/api/sprint-items", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status }),
+      });
+      load();
+    } catch {
+      toast("Failed to update status", "error");
+    }
   };
 
   const toggleTask = async (taskId: number, isDone: boolean) => {
-    await fetch("/api/sprint-tasks", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id: taskId, isDone }),
-    });
-    load();
+    try {
+      await fetch("/api/sprint-tasks", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: taskId, isDone }),
+      });
+      load();
+    } catch {
+      toast("Failed to update task", "error");
+    }
   };
 
   const addTask = async (itemId: number, text: string) => {
-    await fetch("/api/sprint-tasks", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sprintItemId: itemId, text }),
-    });
-    load();
+    try {
+      await fetch("/api/sprint-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sprintItemId: itemId, text }),
+      });
+      load();
+    } catch {
+      toast("Failed to add task", "error");
+    }
   };
 
   const deleteTask = async (taskId: number) => {
-    await fetch(`/api/sprint-tasks?id=${taskId}`, { method: "DELETE" });
-    load();
+    try {
+      await fetch(`/api/sprint-tasks?id=${taskId}`, { method: "DELETE" });
+      load();
+    } catch {
+      toast("Failed to delete task", "error");
+    }
   };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Spinner size="md" />
+        <span className="ml-3 text-sm text-zinc-500">Loading overview...</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex gap-6">
